@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IPDR/CDR Analysis Tool</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+        :root {
+            --bg-color: #1a202c;
+            --sidebar-color: #2d3748;
+            --card-color: #2d3748;
+            --text-color: #edf2f7;
+            --text-muted-color: #a0aec0;
+            --border-color: #4a5568;
+            --accent-color: #3182ce;
+        }
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            font-family: 'Inter', sans-serif;
+        }
+        .scrollbar-thin::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        .scrollbar-thin::-webkit-scrollbar-track {
+            background: var(--sidebar-color);
+        }
+        .scrollbar-thin::-webkit-scrollbar-thumb {
+            background-color: var(--border-color);
+            border-radius: 10px;
+            border: 2px solid var(--sidebar-color);
+        }
+        @import url('https://rsms.me/inter/inter.css');
+        .spinner {
+            border: 4px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top: 4px solid var(--accent-color);
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo, useCallback } = React;
+
+        // --- Main App Component ---
+        const App = () => {
+            const [data, setData] = useState([]);
+            const [analysis, setAnalysis] = useState(null);
+            const [error, setError] = useState(null);
+            const [isLoading, setIsLoading] = useState(false);
+            const [fileName, setFileName] = useState('');
+            
+            // --- State for Filters ---
+            const [searchTerm, setSearchTerm] = useState('');
+            const [dateFrom, setDateFrom] = useState('');
+            const [dateTo, setDateTo] = useState('');
+
+            const handleFileUpload = async (file) => {
+                if (!file) return;
+
+                setIsLoading(true);
+                setError(null);
+                setFileName(file.name);
+                
+                const formData = new FormData();
+                formData.append('file', file);
+
+                try {
+                    const response = await fetch('http://localhost:5000/api/upload', {
+                        method: 'POST',
+                        body: formData,
+                    });
+
+                    if (!response.ok) {
+                        const errData = await response.json();
+                        throw new Error(errData.error || `HTTP error! status: ${response.status}`);
+                    }
+
+                    const result = await response.json();
+                    setData(result.data);
+                    setAnalysis(result.analysis);
+                } catch (e) {
+                    console.error("Upload error:", e);
+                    setError(e.message);
+                    setData([]);
+                    setAnalysis(null);
+                } finally {
+                    setIsLoading(false);
+                }
+            };
+
+            const clearAll = () => {
+                setData([]);
+                setAnalysis(null);
+                setError(null);
+                setFileName('');
+                setSearchTerm('');
+                setDateFrom('');
+                setDateTo('');
+            };
+
+            // Memoized filtered data to prevent re-computation on every render
+            const filteredData = useMemo(() => {
+                if (!data) return [];
+                let filtered = data;
+
+                // Search term filtering
+                if (searchTerm) {
+                    const lowercasedSearchTerm = searchTerm.toLowerCase();
+                    filtered = filtered.filter(row =>
+                        Object.values(row).some(value =>
+                            String(value).toLowerCase().includes(lowercasedSearchTerm)
+                        )
+                    );
+                }
+                
+                // Date range filtering
+                const from = dateFrom ? new Date(dateFrom).getTime() : 0;
+                const to = dateTo ? new Date(dateTo).getTime() : Infinity;
+
+                if (from > 0 || to < Infinity) {
+                    filtered = filtered.filter(row => {
+                        const rowDate = new Date(row.start_time).getTime();
+                        return rowDate >= from && rowDate <= to;
+                    });
+                }
+
+                return filtered;
+            }, [data, searchTerm, dateFrom, dateTo]);
+
+            return (
+                <div className="flex h-screen bg-gray-900 text-gray-200">
+                    {/* --- Sidebar --- */}
+                    <aside className="w-72 bg-gray-800 p-6 flex flex-col justify-between">
+                        <div>
+                            <div className="flex items-center space-x-3 mb-8">
+                                <svg className="w-8 h-8 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                                <h1 className="text-xl font-bold tracking-wider">Analysis Tool</h1>
+                            </div>
+                            
+                            <FilterPanel 
+                                searchTerm={searchTerm} setSearchTerm={setSearchTerm}
+                                dateFrom={dateFrom} setDateFrom={setDateFrom}
+                                dateTo={dateTo} setDateTo={setDateTo}
+                                onClear={clearAll}
+                                hasData={data.length > 0}
+                            />
+                        </div>
+                         <div className="text-xs text-gray-500 text-center">
+                            <p>IPDR/CDR Analysis Tool v1.0</p>
+                            <p>For Official Use Only</p>
+                        </div>
+                    </aside>
+
+                    {/* --- Main Content --- */}
+                    <main className="flex-1 p-8 overflow-y-auto scrollbar-thin">
+                        <FileDropzone onFileUpload={handleFileUpload} fileName={fileName} />
+                        
+                        {isLoading && <LoadingSpinner />}
+                        {error && <ErrorMessage message={error} />}
+
+                        {data.length > 0 && !isLoading && (
+                            <div className="mt-8 space-y-8">
+                                <DashboardStats analysis={analysis} recordCount={filteredData.length} />
+                                <Visualizations data={filteredData} />
+                                <DataTable data={filteredData} />
+                            </div>
+                        )}
+                         {!isLoading && data.length === 0 && !error && (
+                             <div className="text-center mt-16 text-gray-500">
+                                <svg className="mx-auto h-12 w-12" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path></svg>
+                                <h3 className="mt-2 text-sm font-medium text-gray-300">No Data Loaded</h3>
+                                <p className="mt-1 text-sm text-gray-500">Upload a file to begin your analysis.</p>
+                            </div>
+                        )}
+                    </main>
+                </div>
+            );
+        };
+        
+        // --- Child Components ---
+        const FilterPanel = ({ searchTerm, setSearchTerm, dateFrom, setDateFrom, dateTo, setDateTo, onClear, hasData }) => (
+            <div className="space-y-4">
+                <h2 className="text-lg font-semibold text-gray-400 border-b border-gray-600 pb-2">Filters</h2>
+                <div>
+                    <label htmlFor="search" className="block text-sm font-medium text-gray-400">Search Term</label>
+                    <input
+                        type="text"
+                        id="search"
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                        placeholder="IP, MSISDN, IMEI..."
+                        className="mt-1 block w-full bg-gray-700 border border-gray-600 rounded-md shadow-sm py-2 px-3 text-gray-200 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                    />
+                </div>
+                 <div>
+                    <label htmlFor="dateFrom" className="block text-sm font-medium text-gray-400">Date From</label>
+                    <input
+                        type="datetime-local"
+                        id="dateFrom"
+                        value={dateFrom}
+                        onChange={(e) => setDateFrom(e.target.value)}
+                        className="mt-1 block w-full bg-gray-700 border border-gray-600 rounded-md shadow-sm py-2 px-3 text-gray-200 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                    />
+                </div>
+                <div>
+                    <label htmlFor="dateTo" className="block text-sm font-medium text-gray-400">Date To</label>
+                    <input
+                        type="datetime-local"
+                        id="dateTo"
+                        value={dateTo}
+                        onChange={(e) => setDateTo(e.target.value)}
+                        className="mt-1 block w-full bg-gray-700 border border-gray-600 rounded-md shadow-sm py-2 px-3 text-gray-200 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                    />
+                </div>
+                {hasData && (
+                    <button onClick={onClear} className="w-full mt-4 px-4 py-2 bg-red-600 text-white font-semibold rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-800 focus:ring-red-500 transition-colors">
+                        Clear & Reset
+                    </button>
+                )}
+            </div>
+        );
+
+        const FileDropzone = ({ onFileUpload, fileName }) => {
+            const handleDragOver = (e) => e.preventDefault();
+            const handleDrop = (e) => {
+                e.preventDefault();
+                if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+                    onFileUpload(e.dataTransfer.files[0]);
+                }
+            };
+            const handleFileChange = (e) => {
+                if (e.target.files && e.target.files[0]) {
+                    onFileUpload(e.target.files[0]);
+                }
+            };
+
+            return (
+                <div 
+                    className="border-2 border-dashed border-gray-600 rounded-lg p-8 text-center cursor-pointer hover:border-blue-400 hover:bg-gray-800 transition-all"
+                    onDragOver={handleDragOver}
+                    onDrop={handleDrop}
+                    onClick={() => document.getElementById('fileInput').click()}
+                >
+                    <input type="file" id="fileInput" className="hidden" onChange={handleFileChange} />
+                    <svg className="mx-auto h-12 w-12 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path></svg>
+                    <p className="mt-2 text-sm text-gray-400">
+                        <span className="font-semibold text-blue-400">Click to upload</span> or drag and drop
+                    </p>
+                    <p className="text-xs text-gray-500">CSV, TXT files accepted</p>
+                    {fileName && <p className="text-sm mt-2 text-green-400">Loaded: {fileName}</p>}
+                </div>
+            );
+        };
+
+        const LoadingSpinner = () => (
+             <div className="flex flex-col items-center justify-center p-12">
+                <div className="spinner"></div>
+                <p className="mt-4 text-lg text-gray-400">Processing data... Please wait.</p>
+            </div>
+        );
+        
+        const ErrorMessage = ({ message }) => (
+            <div className="bg-red-900 border border-red-600 text-red-200 px-4 py-3 rounded-lg mt-6" role="alert">
+                <strong className="font-bold">Error: </strong>
+                <span className="block sm:inline">{message}</span>
+            </div>
+        );
+
+        const DashboardStats = ({ analysis, recordCount }) => {
+             if (!analysis) return null;
+             return (
+                 <div>
+                    <h2 className="text-2xl font-bold mb-4 text-gray-300">Case Overview</h2>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6">
+                        <StatCard title="Total Records in File" value={analysis.totalRecords.toLocaleString()} />
+                        <StatCard title="Filtered Records" value={recordCount.toLocaleString()} />
+                        <StatCard title="Unique MSISDNs" value={analysis.uniqueMSISDNs.toLocaleString()} />
+                        <StatCard title="Unique IPs" value={analysis.uniqueIPs.toLocaleString()} />
+                        <StatCard title="Unique IMEIs" value={analysis.uniqueIMEIs.toLocaleString()} />
+                    </div>
+                </div>
+             );
+        };
+
+        const StatCard = ({ title, value }) => (
+            <div className="bg-gray-800 p-6 rounded-lg shadow-lg">
+                <h3 className="text-sm font-medium text-gray-400">{title}</h3>
+                <p className="mt-2 text-3xl font-bold text-blue-400">{value}</p>
+            </div>
+        );
+
+        const Visualizations = ({ data }) => {
+             // Prepare data for timeline
+            const timelineData = useMemo(() => {
+                const counts = {};
+                data.forEach(row => {
+                    if (row.start_time) {
+                        try {
+                            const date = new Date(row.start_time).toISOString().split('T')[0];
+                            counts[date] = (counts[date] || 0) + 1;
+                        } catch (e) { /* ignore invalid dates */ }
+                    }
+                });
+                return Object.entries(counts).map(([date, count]) => ({ date, count })).sort((a,b) => new Date(a.date) - new Date(b.date));
+            }, [data]);
+            
+            // Prepare data for link analysis
+            const linkAnalysisData = useMemo(() => {
+                 const nodes = new Map();
+                 const links = new Map();
+                 
+                 const addNode = (id, type) => {
+                     if (!nodes.has(id)) nodes.set(id, { id, type, count: 0 });
+                     nodes.get(id).count += 1;
+                 };
+                 
+                 const addLink = (source, target) => {
+                     if (!source || !target || source === target) return;
+                     const key = [source, target].sort().join('-');
+                     if (!links.has(key)) links.set(key, { source, target, weight: 0 });
+                     links.get(key).weight += 1;
+                 };
+
+                 data.slice(0, 500).forEach(row => { // Limit to 500 records for performance
+                     if (row.msisdn) addNode(row.msisdn, 'msisdn');
+                     if (row.source_ip) addNode(row.source_ip, 'ip');
+                     if (row.imei) addNode(row.imei, 'imei');
+                     
+                     if (row.msisdn && row.imei) addLink(row.msisdn, row.imei);
+                     if (row.msisdn && row.source_ip) addLink(row.msisdn, row.source_ip);
+                     if (row.imei && row.source_ip) addLink(row.imei, row.source_ip);
+                 });
+
+                 return { nodes: Array.from(nodes.values()), links: Array.from(links.values()) };
+            }, [data]);
+
+            return (
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                   <VisualizationCard title="Activity Timeline">
+                        {timelineData.length > 0 ? <TimelineChart data={timelineData} /> : <NoDataMessage />}
+                   </VisualizationCard>
+                   <VisualizationCard title="Link Analysis (Top 500 Records)">
+                        {linkAnalysisData.nodes.length > 1 ? <LinkAnalysisChart data={linkAnalysisData} /> : <NoDataMessage message="Not enough related data to build a chart." />}
+                   </VisualizationCard>
+                </div>
+            );
+        };
+        
+        const VisualizationCard = ({ title, children }) => (
+            <div className="bg-gray-800 p-6 rounded-lg shadow-lg h-96 flex flex-col">
+                <h3 className="text-lg font-semibold text-gray-300 mb-4">{title}</h3>
+                <div className="flex-grow relative">
+                    {children}
+                </div>
+            </div>
+        );
+
+        const TimelineChart = ({ data }) => {
+            const maxCount = Math.max(...data.map(d => d.count), 0);
+            return (
+                <div className="w-full h-full flex items-end space-x-1 overflow-x-auto p-2 scrollbar-thin">
+                    {data.map(({ date, count }) => (
+                        <div key={date} className="group flex-shrink-0 flex items-end" style={{ width: '20px' }}>
+                            <div
+                                className="w-full bg-blue-500 hover:bg-blue-300 transition-colors rounded-t-sm"
+                                style={{ height: `${(count / maxCount) * 100}%` }}
+                            ></div>
+                             <div className="absolute bottom-full mb-2 hidden group-hover:block bg-gray-900 text-white text-xs rounded py-1 px-2 pointer-events-none">
+                                {date}: {count}
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            );
+        };
+
+         const LinkAnalysisChart = ({ data }) => {
+            const [positions, setPositions] = useState({});
+
+            useEffect(() => {
+                const newPositions = {};
+                data.nodes.forEach((node) => {
+                    newPositions[node.id] = {
+                        x: Math.random() * 800,
+                        y: Math.random() * 300,
+                    };
+                });
+                setPositions(newPositions);
+            }, [data]);
+            
+            const nodeColor = (type) => {
+                switch(type) {
+                    case 'msisdn': return '#4299e1'; // blue
+                    case 'ip': return '#48bb78'; // green
+                    case 'imei': return '#ed8936'; // orange
+                    default: return '#a0aec0';
+                }
+            };
+            
+            return (
+                <svg width="100%" height="100%" viewBox="0 0 800 300">
+                    {data.links.map((link, i) => (
+                         positions[link.source] && positions[link.target] && (
+                            <line 
+                                key={i}
+                                x1={positions[link.source].x} y1={positions[link.source].y}
+                                x2={positions[link.target].x} y2={positions[link.target].y}
+                                stroke="#4a5568"
+                                strokeWidth={link.weight}
+                            />
+                         )
+                    ))}
+                    {data.nodes.map(node => (
+                        positions[node.id] && (
+                            <g key={node.id} transform={`translate(${positions[node.id].x}, ${positions[node.id].y})`} className="cursor-pointer group">
+                                <circle r={5 + node.count} fill={nodeColor(node.type)} />
+                                <text x="12" y="4" fontSize="10" fill="#edf2f7" className="hidden group-hover:block">{node.id}</text>
+                            </g>
+                        )
+                    ))}
+                </svg>
+            );
+        };
+        
+        const NoDataMessage = ({ message = "No data available for this visualization." }) => (
+            <div className="w-full h-full flex items-center justify-center text-gray-500">{message}</div>
+        );
+
+        const DataTable = ({ data }) => {
+            const [currentPage, setCurrentPage] = useState(1);
+            const [sortConfig, setSortConfig] = useState(null);
+            const rowsPerPage = 50;
+
+            const headers = data.length > 0 ? Object.keys(data[0]).filter(h => h !== 'id') : [];
+
+            const sortedData = useMemo(() => {
+                let sortableData = [...data];
+                if (sortConfig !== null) {
+                    sortableData.sort((a, b) => {
+                        if (a[sortConfig.key] < b[sortConfig.key]) {
+                            return sortConfig.direction === 'ascending' ? -1 : 1;
+                        }
+                        if (a[sortConfig.key] > b[sortConfig.key]) {
+                            return sortConfig.direction === 'ascending' ? 1 : -1;
+                        }
+                        return 0;
+                    });
+                }
+                return sortableData;
+            }, [data, sortConfig]);
+
+            const requestSort = (key) => {
+                let direction = 'ascending';
+                if (sortConfig && sortConfig.key === key && sortConfig.direction === 'ascending') {
+                    direction = 'descending';
+                }
+                setSortConfig({ key, direction });
+            };
+
+            const paginatedData = sortedData.slice((currentPage - 1) * rowsPerPage, currentPage * rowsPerPage);
+            const totalPages = Math.ceil(sortedData.length / rowsPerPage);
+
+            return (
+                <div>
+                     <h2 className="text-2xl font-bold mb-4 text-gray-300">Data Records</h2>
+                     <div className="bg-gray-800 rounded-lg shadow-lg overflow-hidden">
+                        <div className="overflow-x-auto scrollbar-thin">
+                            <table className="w-full text-sm text-left text-gray-300">
+                                <thead className="text-xs text-gray-400 uppercase bg-gray-700">
+                                    <tr>
+                                        {headers.map(header => (
+                                            <th key={header} scope="col" className="px-6 py-3 cursor-pointer" onClick={() => requestSort(header)}>
+                                                {header.replace(/_/g, ' ').toUpperCase()}
+                                            </th>
+                                        ))}
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {paginatedData.map((row, index) => (
+                                        <tr key={row.id || index} className="bg-gray-800 border-b border-gray-700 hover:bg-gray-600">
+                                            {headers.map(header => (
+                                                <td key={header} className="px-6 py-4 whitespace-nowrap">{row[header]}</td>
+                                            ))}
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                        <Pagination 
+                            currentPage={currentPage} 
+                            totalPages={totalPages} 
+                            onPageChange={setCurrentPage} 
+                        />
+                     </div>
+                </div>
+            );
+        };
+        
+        const Pagination = ({ currentPage, totalPages, onPageChange }) => {
+            if (totalPages <= 1) return null;
+            
+            const handlePrev = () => onPageChange(p => Math.max(1, p - 1));
+            const handleNext = () => onPageChange(p => Math.min(totalPages, p + 1));
+            
+            return (
+                 <div className="flex justify-between items-center p-4 bg-gray-700">
+                    <button onClick={handlePrev} disabled={currentPage === 1} className="px-4 py-2 bg-gray-600 text-white rounded disabled:opacity-50 disabled:cursor-not-allowed">
+                        Previous
+                    </button>
+                    <span className="text-sm text-gray-400">
+                        Page {currentPage} of {totalPages}
+                    </span>
+                    <button onClick={handleNext} disabled={currentPage === totalPages} className="px-4 py-2 bg-gray-600 text-white rounded disabled:opacity-50 disabled:cursor-not-allowed">
+                        Next
+                    </button>
+                </div>
+            );
+        };
+
+        ReactDOM.render(<App />, document.getElementById('root'));
+    </script>
+</body>
+</html>
